@@ -10,6 +10,55 @@ API_KEY = st.secrets["API_KEY"]
 youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 # =========================
+# 스타일
+# =========================
+st.markdown("""
+<style>
+.divider {
+    width:1px;
+    background:#2a2d34;
+    height:100%;
+}
+
+.card {
+    background:#1c1f26;
+    padding:15px;
+    border-radius:10px;
+    margin-bottom:15px;
+}
+
+.metric-box {
+    background:#2a2d34;
+    padding:10px;
+    border-radius:8px;
+    text-align:center;
+}
+
+.metric-title {
+    font-size:12px;
+    color:#aaa;
+}
+
+.metric-value {
+    font-size:16px;
+    font-weight:bold;
+}
+
+.badge-best {color:#ff4d4d; font-weight:bold;}
+.badge-good {color:#4dabf7; font-weight:bold;}
+.badge-soso {color:#999;}
+
+.video-btn {
+    background:#ff0000;
+    color:white;
+    padding:6px 10px;
+    border-radius:6px;
+    text-decoration:none;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
 # 유틸
 # =========================
 def parse_duration(duration):
@@ -19,14 +68,6 @@ def parse_duration(duration):
     s = int(match.group(3)) if match.group(3) else 0
     return h*3600 + m*60 + s
 
-def score_to_grade(score):
-    if score > 8:
-        return "🔥 Best"
-    elif score > 3:
-        return "👍 Good"
-    else:
-        return "😐 SoSo"
-
 def calculate_score(views, subs, days):
     if subs == 0:
         subs = 1
@@ -35,10 +76,19 @@ def calculate_score(views, subs, days):
     log_views = math.log10(views + 1)
     return base * freshness * log_views
 
+def score_to_grade(score):
+    if score > 8:
+        return "🔥 Best"
+    elif score > 3:
+        return "👍 Good"
+    else:
+        return "😐 SoSo"
+
 # =========================
-# 신규 영상 분석
+# 신규 분석
 # =========================
 def analyze(query):
+
     res = youtube.search().list(
         q=query,
         part='snippet',
@@ -55,16 +105,24 @@ def analyze(query):
         id=",".join(video_ids)
     ).execute()['items']
 
-    channel_stats = youtube.channels().list(
+    # 🔥 핵심 수정 (채널 매핑)
+    channel_response = youtube.channels().list(
         part='statistics',
         id=",".join(channel_ids)
     ).execute()['items']
 
+    channel_map = {
+        c['id']: int(c['statistics'].get('subscriberCount', 1))
+        for c in channel_response
+    }
+
     results = []
 
     for i in range(len(video_details)):
+
         duration = parse_duration(video_details[i]['contentDetails']['duration'])
 
+        # 롱폼만
         if duration <= 60:
             continue
 
@@ -73,10 +131,8 @@ def analyze(query):
         except:
             views = 0
 
-        try:
-            subs = int(channel_stats[i]['statistics'].get('subscriberCount', 1))
-        except:
-            subs = 1
+        channel_id = video_details[i]['snippet']['channelId']
+        subs = channel_map.get(channel_id, 1)
 
         published = video_details[i]['snippet']['publishedAt']
         date = published.split("T")[0]
@@ -93,7 +149,8 @@ def analyze(query):
             "subs": subs,
             "date": date,
             "score": round(score, 2),
-            "grade": score_to_grade(score)
+            "grade": score_to_grade(score),
+            "video_id": video_ids[i]
         })
 
     results.sort(key=lambda x: x['score'], reverse=True)
@@ -129,72 +186,87 @@ def analyze_existing_video(url):
     ]
 
     feedback = [
-        "텍스트 크기 키우기 (3~5단어)",
-        "얼굴 or 감정 표현 추가",
-        "빨강/노랑 대비 강화",
+        "텍스트 크게 (3~5단어)",
+        "얼굴 클로즈업 추가",
+        "강한 색 대비 (빨강/노랑)",
         "핵심 키워드 1개만 강조"
     ]
 
     return title, views, improved_titles, feedback
 
 # =========================
-# UI
+# UI 구조
 # =========================
+col1, divider, col2 = st.columns([1, 0.02, 1])
 
-st.markdown("""
-<style>
-body {background-color:#0e1117; color:white;}
-.block-container {padding-top:2rem;}
-.card {
-    background:#1c1f26;
-    padding:15px;
-    border-radius:10px;
-    margin-bottom:15px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-col1, col2 = st.columns([1,1], gap="large")
+with divider:
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
 # =========================
-# 좌측 (신규)
+# 좌측
 # =========================
 with col1:
     st.header("🔍 신규 영상 분석")
 
-    keyword = st.text_input("키워드 입력")
+    with st.form("search_form"):
+        keyword = st.text_input("키워드 입력")
+        submitted = st.form_submit_button("분석 시작")
 
-    if st.button("분석 시작"):
+    if submitted:
         results = analyze(keyword)
 
         for r in results:
+            video_url = f"https://www.youtube.com/watch?v={r['video_id']}"
+
             st.markdown('<div class="card">', unsafe_allow_html=True)
 
             st.image(r["thumbnail"])
-            st.write("제목:", r["title"])
-            st.write("조회수:", f"{r['views']:,}")
-            st.write("구독자:", f"{r['subs']:,}")
-            st.write("업로드:", r["date"])
-            st.write("등급:", r["grade"])
+
+            st.markdown(f"""
+            <div style="display:flex; justify-content:space-between;">
+            <div><b>{r["title"]}</b></div>
+            <a href="{video_url}" target="_blank" class="video-btn">영상 확인</a>
+            </div>
+            """, unsafe_allow_html=True)
+
+            m1, m2, m3 = st.columns(3)
+
+            with m1:
+                st.markdown(f"<div class='metric-box'><div class='metric-title'>조회수</div><div class='metric-value'>{r['views']:,}</div></div>", unsafe_allow_html=True)
+            with m2:
+                st.markdown(f"<div class='metric-box'><div class='metric-title'>구독자</div><div class='metric-value'>{r['subs']:,}</div></div>", unsafe_allow_html=True)
+            with m3:
+                st.markdown(f"<div class='metric-box'><div class='metric-title'>업로드</div><div class='metric-value'>{r['date']}</div></div>", unsafe_allow_html=True)
+
+            if "Best" in r["grade"]:
+                cls = "badge-best"
+            elif "Good" in r["grade"]:
+                cls = "badge-good"
+            else:
+                cls = "badge-soso"
+
+            st.markdown(f"<div class='{cls}'>등급: {r['grade']}</div>", unsafe_allow_html=True)
 
             st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# 우측 (기존)
+# 우측
 # =========================
 with col2:
     st.header("📌 기존 영상 개선")
 
-    url = st.text_input("영상 링크")
+    with st.form("video_form"):
+        url = st.text_input("영상 링크")
+        submitted2 = st.form_submit_button("영상 분석")
 
-    if st.button("영상 분석"):
+    if submitted2:
         result = analyze_existing_video(url)
 
         if result:
             title, views, improved, feedback = result
 
             st.write("현재 제목:", title)
-            st.write("조회수:", views)
+            st.write("조회수:", f"{views:,}")
 
             st.subheader("🔥 개선 제목")
             for t in improved:
